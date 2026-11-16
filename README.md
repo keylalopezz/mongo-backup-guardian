@@ -12,6 +12,13 @@ Una biblioteca universitaria (libros, socios y préstamos) sobre **MongoDB Atlas
 
 **App publicada:** https://mongo-backup-guardian.onrender.com
 
+| Recurso | Enlace |
+|---|---|
+| Artículo de Keyla — Un respaldo que no se restaura no es un respaldo (dump completo, oplog y PITR) | https://dev.to/keylalopezz/un-respaldo-que-no-se-restaura-no-es-un-respaldo-estrategia-de-backup-en-mongodb-con-dump-lo1 |
+| Artículo de Adrian — Respaldos de MongoDB en piloto automático (GitHub Actions, AES-256, 3-2-1 y DR) | https://dev.to/adriansalasepis/respaldos-de-mongodb-en-piloto-automatico-github-actions-cifrado-aes-256-regla-3-2-1-y-un-4b0g |
+| Video (YouTube, 4:13) | https://youtu.be/X4p_V9Yl1QA |
+| Automatización (GitHub Actions) | https://github.com/keylalopezz/mongo-backup-guardian/actions |
+
 ![Laboratorio de desastre: restauración verificada](docs/img/app.png)
 
 ## Estrategia de respaldo
