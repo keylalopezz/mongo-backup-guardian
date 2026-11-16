@@ -1,0 +1,68 @@
+name: pitr
+
+# Point-in-time recovery con oplog en un replica set real (el plan M0 de Atlas no expone el oplog,
+# así que la técnica se demuestra y se ensaya aquí cada semana).
+on:
+  schedule:
+    - cron: "30 9 * * 0"   # domingos 04:30 en Lima
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'scripts/pitr.sh'
+      - '.github/workflows/pitr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pitr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pymongo
+
+      - name: Respaldo completo + oplog, desastre y recuperación a un punto en el tiempo
+        env:
+          PY: python
+          WORK: ${{ runner.temp }}/pitr
+        run: bash scripts/pitr.sh
+
+      - name: Resumen
+        if: always()
+        env:
+          R: ${{ runner.temp }}/pitr/resultado.json
+        run: |
+          [ -f "$R" ] || exit 0
+          j() { jq -r "$1" "$R"; }
+          {
+            echo "## Point-in-time recovery con oplog"
+            echo
+            echo "| Momento | Documentos en \`prestamos\` | SHA-256 |"
+            echo "|---|---:|---|"
+            echo "| Justo antes del desastre | $(j .documentosAntesDelDesastre) | \`$(j .sha256Correcto | cut -c1-16)…\` |"
+            echo "| Después de \`deleteMany({})\` | $(j .documentosTrasElDesastre) | — |"
+            echo "| Restaurando solo el respaldo completo | $(j .documentosSoloCompleto) | \`$(j .sha256Completo | cut -c1-16)…\` |"
+            echo "| Completo + replay del oplog hasta \`$(j .oplogLimit)\` | $(j .documentosPitr) | \`$(j .sha256Pitr | cut -c1-16)…\` |"
+            echo
+            echo "- Primera operación del desastre en el oplog: \`$(j .operacionDesastre)\`"
+            echo "- Entradas de oplog respaldadas: $(j .oplogEntradas)"
+            echo "- Tiempos: dump $(j .msDump) ms · restauración del completo $(j .msRestauracionCompleto) ms · replay del oplog $(j .msReplayOplog) ms"
+            if [ "$(j .verificado)" = true ]; then echo; echo "**✅ Recuperación verificada: misma huella que justo antes del desastre**"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Registrar en la app
+        if: success() && vars.APP_URL != ''
+        continue-on-error: true
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          GUARDIAN_TOKEN: ${{ secrets.GUARDIAN_TOKEN }}
+          R: ${{ runner.temp }}/pitr/resultado.json
+        run: |
+          jq --arg run "$GITHUB_RUN_NUMBER" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{tipo:"PITR con oplog (replica set en CI)", run:$run, url:$url, documentos:.documentosPitr, verificado:.verificado,
+              duracionSeg:(((.msDump + .msRestauracionCompleto + .msReplayOplog) / 1000) | floor)}' "$R" \
+          | curl -fsS -X POST "$APP_URL/api/respaldos" -H "Content-Type: application/json" -H "X-Guardian-Token: $GUARDIAN_TOKEN" -d @-

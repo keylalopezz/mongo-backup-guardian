@@ -1,0 +1,162 @@
+name: backup
+
+# Respaldo diario de MongoDB Atlas:
+# mongodump (usuario de solo lectura) -> restauración de prueba en un MongoDB desechable
+# -> comparación de huellas SHA-256 -> cifrado AES-256 -> 2 copias fuera de Atlas -> registro en la app
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 03:00 en Lima (UTC-5)
+  workflow_dispatch:
+
+permissions:
+  contents: write   # publicar el respaldo cifrado en el release "respaldos"
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  DB: biblioteca
+  APP_URL: ${{ vars.APP_URL }}
+  RETENER: 14   # respaldos que se conservan en el release
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    services:
+      desechable:
+        image: mongo:8.0
+        ports: [ "27018:27017" ]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      URI_PROD: mongodb+srv://guardian-backup:${{ secrets.MONGO_BACKUP_PASSWORD }}@${{ secrets.MONGODB_HOST }}/?appName=guardian-backup
+      URI_PRUEBA: mongodb://localhost:27018
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar
+        run: |
+          echo "INICIO=$(date +%s)" >> "$GITHUB_ENV"
+          echo "NOMBRE=biblioteca-$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_ENV"
+
+      - name: Despertar la app (Render free se suspende)
+        continue-on-error: true
+        run: for _ in $(seq 1 18); do curl -fsS "$APP_URL/health" && break; sleep 10; done
+
+      - name: Actividad del día (préstamos nuevos)
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: curl -fsS -X POST "$APP_URL/api/actividad?n=8"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pymongo
+
+      - name: 1. Huella de producción
+        run: |
+          python scripts/huella.py "$URI_PROD" "$DB" > origen.json
+          cat origen.json
+
+      - name: 2. mongodump (usuario de solo lectura)
+        run: |
+          T=$(date +%s%3N)
+          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+            mongodump --uri "$URI_PROD" --db "$DB" --gzip --archive=/w/respaldo.archive.gz
+          echo "MS_DUMP=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
+          ls -l respaldo.archive.gz
+
+      - name: 3. Restauración de prueba en un MongoDB desechable
+        run: |
+          T=$(date +%s%3N)
+          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+            mongorestore --uri "$URI_PRUEBA" --gzip --archive=/w/respaldo.archive.gz --drop
+          echo "MS_RESTORE=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
+
+      - name: 4. Comparar producción vs. copia restaurada
+        run: |
+          python scripts/huella.py "$URI_PRUEBA" "$DB" > restaurado.json
+          if python scripts/comparar.py origen.json restaurado.json > comparacion.md; then
+            echo "VERIFICADO=true" >> "$GITHUB_ENV"
+          else
+            # Si producción recibió escrituras durante el dump, se compara con su estado actual.
+            python scripts/huella.py "$URI_PROD" "$DB" > origen.json
+            python scripts/comparar.py origen.json restaurado.json > comparacion.md && echo "VERIFICADO=true" >> "$GITHUB_ENV"
+          fi
+          cat comparacion.md
+          grep -q "VERIFICADO=true" "$GITHUB_ENV" || { echo "::error::La copia restaurada no coincide con producción"; exit 1; }
+
+      - name: 5. Cifrar con AES-256 y generar el manifiesto
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          mkdir salida
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
+            --symmetric --cipher-algo AES256 --output "salida/$NOMBRE.archive.gz.gpg" respaldo.archive.gz
+          rm respaldo.archive.gz   # nunca sale del runner sin cifrar
+          SHA=$(sha256sum "salida/$NOMBRE.archive.gz.gpg" | cut -d' ' -f1)
+          BYTES=$(stat -c %s "salida/$NOMBRE.archive.gz.gpg")
+          jq -n --arg nombre "$NOMBRE" --arg sha "$SHA" --argjson bytes "$BYTES" --arg run "$GITHUB_RUN_ID" \
+                --arg commit "$GITHUB_SHA" --slurpfile huellas origen.json \
+            '{respaldo:$nombre, fecha:(now|todate), sha256Cifrado:$sha, bytesCifrados:$bytes, cifrado:"AES-256 (OpenPGP, gpg --symmetric)",
+              herramienta:"mongodump --gzip --archive", run:$run, commit:$commit, colecciones:$huellas[0]}' \
+            > "salida/$NOMBRE.manifest.json"
+          cat "salida/$NOMBRE.manifest.json"
+          echo "SHA_CIFRADO=$SHA" >> "$GITHUB_ENV"
+          echo "BYTES_CIFRADO=$BYTES" >> "$GITHUB_ENV"
+
+      - name: 6a. Copia fuera de Atlas — artefacto de Actions (30 días)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NOMBRE }}
+          path: salida/
+          retention-days: 30
+
+      - name: 6b. Copia fuera de Atlas — release "respaldos" (últimos 14)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view respaldos >/dev/null 2>&1 || gh release create respaldos --title "Respaldos cifrados de MongoDB" --latest=false \
+            --notes "Respaldos diarios de la base biblioteca: mongodump comprimido y cifrado con AES-256. Cada uno trae su manifiesto con las huellas SHA-256 por colección."
+          gh release upload respaldos salida/* --clobber
+          gh release view respaldos --json assets -q '.assets[].name' | grep '\.archive\.gz\.gpg$' | sort -r | tail -n +$((RETENER + 1)) \
+            | while read -r viejo; do
+                base=${viejo%.archive.gz.gpg}
+                gh release delete-asset respaldos "$viejo" -y
+                gh release delete-asset respaldos "$base.manifest.json" -y || true
+              done
+
+      - name: 7. Registrar el respaldo en la app
+        if: always()
+        continue-on-error: true
+        env:
+          GUARDIAN_TOKEN: ${{ secrets.GUARDIAN_TOKEN }}
+        run: |
+          DOCS=$(jq '[.[].documentos] | add' origen.json)
+          jq -n --arg tipo "mongodump diario" --arg run "$GITHUB_RUN_NUMBER" \
+                --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --argjson docs "$DOCS" --argjson ok "${VERIFICADO:-false}" --arg sha "${SHA_CIFRADO:-}" \
+                --argjson bytes "${BYTES_CIFRADO:-0}" --argjson dur "$(( $(date +%s) - INICIO ))" \
+            '{tipo:$tipo, run:$run, url:$url, documentos:$docs, verificado:$ok, sha256Cifrado:$sha, bytesCifrados:$bytes, duracionSeg:$dur}' \
+          | curl -fsS -X POST "$APP_URL/api/respaldos" -H "Content-Type: application/json" -H "X-Guardian-Token: $GUARDIAN_TOKEN" -d @-
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Respaldo \`$NOMBRE\`"
+            echo
+            if [ "${VERIFICADO:-false}" = true ]; then echo "**Restauración de prueba: ✅ idéntica a producción**"; else echo "**Restauración de prueba: ❌ falló**"; fi
+            echo
+            [ -f comparacion.md ] && cat comparacion.md
+            echo
+            echo "| Paso | Resultado |"
+            echo "|---|---|"
+            echo "| mongodump | ${MS_DUMP:-?} ms |"
+            echo "| mongorestore en MongoDB desechable | ${MS_RESTORE:-?} ms |"
+            echo "| Archivo cifrado (AES-256) | ${BYTES_CIFRADO:-?} bytes |"
+            echo "| SHA-256 del archivo cifrado | \`${SHA_CIFRADO:-?}\` |"
+            echo "| Copias fuera de Atlas | artefacto de Actions (30 días) + release \`respaldos\` (últimos $RETENER) |"
+          } >> "$GITHUB_STEP_SUMMARY"

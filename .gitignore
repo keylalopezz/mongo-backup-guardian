@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/tfplan
+*.archive.gz
+*.gpg
+respaldo/

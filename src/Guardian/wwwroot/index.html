@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mongo Backup Guardian · Biblioteca</title>
+<style>
+  :root { --bg:#0f1720; --card:#16212d; --borde:#243344; --txt:#e6edf3; --sub:#8fa3b8; --verde:#3fb950; --rojo:#f85149; --ambar:#d29922; --azul:#58a6ff; --mongo:#00ed64; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:18px 28px; border-bottom:1px solid var(--borde); display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  header h1 { font-size:22px; margin:0; }
+  header h1 span { color:var(--mongo); }
+  .sub { color:var(--sub); font-size:13px; }
+  .chips { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { background:var(--card); border:1px solid var(--borde); border-radius:20px; padding:4px 12px; font-size:12px; color:var(--sub); }
+  .chip b { color:var(--txt); font-weight:600; }
+  main { padding:20px 28px; display:grid; grid-template-columns:repeat(12,1fr); gap:18px; }
+  .card { background:var(--card); border:1px solid var(--borde); border-radius:10px; padding:16px 18px; }
+  .card h2 { font-size:15px; margin:0 0 4px; }
+  .card p.sub { margin:0 0 12px; }
+  .c7 { grid-column:span 7; } .c5 { grid-column:span 5; } .c12 { grid-column:span 12; } .c6 { grid-column:span 6; }
+  @media (max-width:1000px) { .c7,.c5,.c6 { grid-column:span 12; } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:var(--sub); font-weight:500; border-bottom:1px solid var(--borde); padding:6px 8px; }
+  td { padding:7px 8px; border-bottom:1px solid #1d2a38; vertical-align:top; }
+  code, .mono { font-family:Consolas,"Cascadia Mono",monospace; font-size:12px; }
+  .ok { color:var(--verde); font-weight:600; } .mal { color:var(--rojo); font-weight:600; } .neutro { color:var(--sub); }
+  .num { font-size:20px; font-weight:600; }
+  button { font:inherit; font-size:13px; border-radius:6px; border:1px solid var(--borde); padding:8px 12px; cursor:pointer; color:var(--txt); background:#1f2d3c; }
+  button:hover { filter:brightness(1.2); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .b-verde { background:#1a7f37; border-color:#2ea043; }
+  .b-rojo { background:#5a1d1d; border-color:#8e2b2b; }
+  .b-azul { background:#1f4f8a; border-color:#2f6db5; }
+  .acciones { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  .grupo { font-size:12px; color:var(--sub); margin:10px 0 6px; text-transform:uppercase; letter-spacing:.05em; }
+  #resultado { background:#0b121a; border:1px solid var(--borde); border-radius:8px; padding:10px 12px; min-height:86px; font-size:13px; white-space:pre-wrap; }
+  .evento { display:flex; gap:10px; padding:6px 0; border-bottom:1px solid #1d2a38; font-size:13px; }
+  .evento .t { color:var(--sub); min-width:64px; font-family:Consolas,monospace; font-size:12px; }
+  .tag { font-size:11px; border-radius:4px; padding:1px 6px; text-transform:uppercase; height:fit-content; }
+  .tag.snapshot { background:#1f4f8a; } .tag.desastre { background:#8e2b2b; } .tag.restauracion { background:#1a7f37; }
+  .tag.ci { background:#6e40c9; } .tag.actividad, .tag.semilla { background:#3a4a5c; }
+  footer { padding:10px 28px 24px; color:var(--sub); font-size:12px; }
+  a { color:var(--azul); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Mongo Backup <span>Guardian</span></h1>
+    <div class="sub">Biblioteca universitaria sobre MongoDB Atlas · respaldos verificados, cifrados y restaurables</div>
+  </div>
+  <div class="chips">
+    <div class="chip">MongoDB <b id="i-mongo">…</b></div>
+    <div class="chip">latencia <b id="i-lat">…</b></div>
+    <div class="chip">versión <b id="i-ver" class="mono">…</b></div>
+  </div>
+</header>
+
+<main>
+  <section class="card c7">
+    <h2>Estado de las colecciones</h2>
+    <p class="sub">Huella = SHA-256 del contenido BSON ordenado por <code>_id</code>. Si un solo campo cambia, la huella cambia, aunque el conteo siga igual.</p>
+    <table>
+      <thead><tr><th>Colección</th><th>Documentos</th><th>Huella SHA-256</th><th>vs. último punto</th></tr></thead>
+      <tbody id="t-estado"><tr><td colspan="4" class="neutro">Conectando…</td></tr></tbody>
+    </table>
+    <div class="sub" style="margin-top:8px">Último punto de restauración: <b id="ultimo" class="mono">—</b> · Préstamos: <span id="por-estado">—</span></div>
+  </section>
+
+  <section class="card c5">
+    <h2>Laboratorio de desastre y restauración</h2>
+    <p class="sub">Todo se ejecuta en vivo contra la base de producción.</p>
+    <div class="grupo">1 · Respaldar</div>
+    <div class="acciones">
+      <button class="b-azul" onclick="accion('POST','/api/snapshots?origen=panel','Creando punto de restauración…')">Crear punto de restauración</button>
+      <button onclick="accion('POST','/api/actividad?n=5','Registrando préstamos…')">+5 préstamos</button>
+    </div>
+    <div class="grupo">2 · Provocar un desastre</div>
+    <div class="acciones">
+      <button class="b-rojo" onclick="desastre('borrado-masivo')">Borrar todos los préstamos</button>
+      <button class="b-rojo" onclick="desastre('drop-coleccion')">drop() de libros</button>
+      <button class="b-rojo" onclick="desastre('corrupcion')">Corromper socios</button>
+    </div>
+    <div class="grupo">3 · Recuperar</div>
+    <div class="acciones">
+      <button class="b-verde" onclick="accion('POST','/api/snapshots/ultimo/restaurar','Restaurando desde el último punto…')">Restaurar último punto y verificar</button>
+    </div>
+    <div id="resultado" class="mono neutro">Aquí aparece el resultado de cada operación.</div>
+  </section>
+
+  <section class="card c12">
+    <h2>Respaldos automáticos externos (GitHub Actions)</h2>
+    <p class="sub"><code>mongodump</code> diario → restauración de prueba en un MongoDB desechable → comparación de huellas → cifrado AES-256 → copia fuera de Atlas.</p>
+    <table>
+      <thead><tr><th>Fecha</th><th>Tipo</th><th>Documentos</th><th>Archivo cifrado</th><th>Restauración de prueba</th><th>Duración</th><th>Ejecución</th></tr></thead>
+      <tbody id="t-ci"><tr><td colspan="7" class="neutro">Aún no hay respaldos registrados.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card c6">
+    <h2>Puntos de restauración en la app</h2>
+    <p class="sub">BSON + gzip guardado en GridFS (se conservan los 10 más recientes).</p>
+    <table>
+      <thead><tr><th>Punto</th><th>Origen</th><th>Documentos</th><th>Tamaño</th><th>Tiempo</th><th></th></tr></thead>
+      <tbody id="t-snap"></tbody>
+    </table>
+  </section>
+
+  <section class="card c6">
+    <h2>Línea de tiempo</h2>
+    <p class="sub">Eventos registrados por la app y por los workflows.</p>
+    <div id="eventos"></div>
+  </section>
+
+  <section class="card c12">
+    <h2>Préstamos recientes</h2>
+    <table>
+      <thead><tr><th>Código</th><th>Libro</th><th>Socio</th><th>Fecha</th><th>Límite</th><th>Estado</th></tr></thead>
+      <tbody id="t-prest"></tbody>
+    </table>
+  </section>
+</main>
+
+<footer>
+  Base de Datos II · Universidad Privada de Tacna · Keyla Noelia Lopez Ojeda y Adrian Fabricio Salas Acuña ·
+  <a href="https://github.com/keylalopezz/mongo-backup-guardian">código fuente</a>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const hora = f => new Date(f).toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+const fecha = f => new Date(f).toLocaleString('es-PE', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+const kb = b => b >= 1048576 ? (b/1048576).toFixed(2)+' MB' : (b/1024).toFixed(1)+' KB';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.json(); };
+
+async function info() {
+  try {
+    const i = await get('/api/info');
+    $('i-mongo').textContent = i.mongo ?? '…';
+    $('i-lat').textContent = i.latenciaMs != null ? i.latenciaMs + ' ms' : '…';
+    $('i-ver').textContent = (i.version || 'dev').slice(0, 7);
+  } catch {}
+}
+
+async function estado() {
+  const e = await get('/api/estado');
+  $('t-estado').innerHTML = e.colecciones.map(c => `<tr>
+    <td><b>${c.coleccion}</b></td><td class="num">${c.documentos}</td>
+    <td class="mono">${c.sha256.slice(0, 16)}…</td>
+    <td>${c.coincideConUltimo === null ? '<span class="neutro">sin punto</span>' : c.coincideConUltimo ? '<span class="ok">✔ coincide</span>' : '<span class="mal">✖ difiere</span>'}</td></tr>`).join('');
+  $('ultimo').textContent = e.ultimoSnapshot ?? '—';
+  $('por-estado').textContent = e.prestamosPorEstado.map(x => `${x._id}: ${x.total}`).join(' · ') || '—';
+}
+
+async function snapshots() {
+  const s = await get('/api/snapshots');
+  $('t-snap').innerHTML = s.map(x => `<tr>
+    <td class="mono">${x._id}</td><td>${esc(x.origen)}</td>
+    <td>${x.colecciones.map(c => c.documentos).reduce((a, b) => a + b, 0)}</td>
+    <td>${kb(x.bytesComprimidos)}</td><td>${x.duracionMs} ms</td>
+    <td><button onclick="accion('POST','/api/snapshots/${x._id}/restaurar','Restaurando ${x._id}…')">Restaurar</button></td></tr>`).join('')
+    || '<tr><td colspan="6" class="neutro">Sin puntos todavía.</td></tr>';
+}
+
+async function respaldos() {
+  const r = await get('/api/respaldos');
+  if (!r.length) return;
+  $('t-ci').innerHTML = r.map(x => `<tr>
+    <td>${fecha(x.fechaRegistro)}</td><td>${esc(x.tipo)}</td><td>${x.documentos ?? '—'}</td>
+    <td class="mono">${x.bytesCifrados ? kb(x.bytesCifrados) : '—'} ${x.sha256Cifrado ? '· ' + esc(x.sha256Cifrado).slice(0, 12) + '…' : ''}</td>
+    <td>${x.verificado ? '<span class="ok">✔ idéntica</span>' : '<span class="mal">✖ diferencias</span>'}</td>
+    <td>${x.duracionSeg != null ? x.duracionSeg + ' s' : '—'}</td>
+    <td>${x.url ? `<a href="${esc(x.url)}" target="_blank">#${esc(x.run)}</a>` : esc(x.run)}</td></tr>`).join('');
+}
+
+async function eventos() {
+  const ev = await get('/api/eventos');
+  $('eventos').innerHTML = ev.slice(0, 12).map(e => `<div class="evento">
+    <span class="t">${hora(e.fecha)}</span><span class="tag ${e.tipo}">${e.tipo}</span><span>${esc(e.mensaje)}</span></div>`).join('');
+}
+
+async function prestamos() {
+  const p = await get('/api/prestamos?limite=8');
+  $('t-prest').innerHTML = p.map(x => `<tr>
+    <td class="mono">${x._id}</td><td>${esc(x.libro ?? '(libro no encontrado)')}</td><td>${esc(x.socio ?? '—')}</td>
+    <td>${fecha(x.fechaPrestamo)}</td><td>${fecha(x.fechaLimite)}</td>
+    <td class="${x.estado === 'vencido' ? 'mal' : x.estado === 'activo' ? 'ok' : 'neutro'}">${x.estado}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="mal">No hay préstamos.</td></tr>';
+}
+
+async function refrescar() {
+  await Promise.allSettled([info(), estado(), snapshots(), respaldos(), eventos(), prestamos()]);
+}
+
+function desastre(tipo) { accion('POST', '/api/desastre/' + tipo, 'Provocando desastre…'); }
+
+async function accion(metodo, url, texto) {
+  const botones = document.querySelectorAll('button');
+  botones.forEach(b => b.disabled = true);
+  const res = $('resultado');
+  res.className = 'mono neutro';
+  res.textContent = texto;
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, { method: metodo });
+    const d = await r.json();
+    const ms = Math.round(performance.now() - t0);
+    res.className = 'mono';
+    if (d.snapshot && d.colecciones) {
+      res.innerHTML = `<span class="${d.verificado ? 'ok' : 'mal'}">${d.verificado ? '✔ Restauración verificada' : '✖ La restauración no coincide'}</span> · ${d.snapshot} · ${d.duracionMs} ms\n` +
+        d.colecciones.map(c => `${c.coleccion.padEnd(10)} ${String(c.restaurados).padStart(4)}/${c.esperados} docs  sha256 ${c.sha256.slice(0, 12)}…  ${c.verificado ? '✔' : '✖'}  ${c.ms} ms`).join('\n');
+    } else if (d.afectados !== undefined) {
+      res.innerHTML = `<span class="mal">✖ Desastre: ${esc(d.descripcion)}</span>\n${d.afectados} documentos afectados`;
+    } else if (d.bytesComprimidos !== undefined) {
+      res.innerHTML = `<span class="ok">✔ Punto de restauración ${d._id}</span> · ${kb(d.bytesComprimidos)} · ${d.duracionMs} ms\n` +
+        d.colecciones.map(c => `${c.coleccion.padEnd(10)} ${String(c.documentos).padStart(4)} docs  sha256 ${c.sha256.slice(0, 12)}…`).join('\n');
+    } else {
+      res.textContent = JSON.stringify(d) + `  (${ms} ms)`;
+    }
+  } catch (e) {
+    res.className = 'mono mal';
+    res.textContent = 'Error: ' + e.message;
+  }
+  await refrescar();
+  botones.forEach(b => b.disabled = false);
+}
+
+refrescar();
+setInterval(refrescar, 15000);
+</script>
+</body>
+</html>

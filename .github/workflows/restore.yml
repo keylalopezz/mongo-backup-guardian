@@ -1,0 +1,137 @@
+name: restore
+
+# Recuperación ante desastres: toma un respaldo cifrado del release "respaldos",
+# comprueba su integridad, lo descifra, lo restaura en un MongoDB desechable y lo verifica.
+# Con destino=produccion (y la palabra RESTAURAR) además reemplaza los datos en Atlas.
+on:
+  workflow_dispatch:
+    inputs:
+      respaldo:
+        description: 'Nombre del respaldo (p. ej. biblioteca-20261116-080012) o "ultimo"'
+        default: ultimo
+        required: true
+      destino:
+        description: 'Dónde restaurar'
+        type: choice
+        options: [ prueba, produccion ]
+        default: prueba
+      confirmacion:
+        description: 'Escribe RESTAURAR para restaurar en producción'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  DB: biblioteca
+  APP_URL: ${{ vars.APP_URL }}
+
+jobs:
+  restaurar:
+    runs-on: ubuntu-latest
+    services:
+      desechable:
+        image: mongo:8.0
+        ports: [ "27018:27017" ]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      URI_PRUEBA: mongodb://localhost:27018
+      URI_APP: mongodb+srv://guardian-app:${{ secrets.MONGO_APP_PASSWORD }}@${{ secrets.MONGODB_HOST }}/?appName=guardian-restore
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar la petición
+        env:
+          DESTINO: ${{ inputs.destino }}
+          CONFIRMACION: ${{ inputs.confirmacion }}
+        run: |
+          echo "INICIO=$(date +%s)" >> "$GITHUB_ENV"
+          if [ "$DESTINO" = produccion ] && [ "$CONFIRMACION" != RESTAURAR ]; then
+            echo "::error::Para restaurar en producción escribe RESTAURAR en 'confirmacion'"; exit 1
+          fi
+
+      - name: 1. Descargar el respaldo cifrado y su manifiesto
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESPALDO: ${{ inputs.respaldo }}
+        run: |
+          if [ "$RESPALDO" = ultimo ]; then
+            RESPALDO=$(gh release view respaldos --json assets -q '.assets[].name' | grep '\.archive\.gz\.gpg$' | sort -r | head -1)
+            RESPALDO=${RESPALDO%.archive.gz.gpg}
+          fi
+          echo "NOMBRE=$RESPALDO" >> "$GITHUB_ENV"
+          gh release download respaldos -p "$RESPALDO.archive.gz.gpg" -p "$RESPALDO.manifest.json"
+          jq . "$RESPALDO.manifest.json"
+
+      - name: 2. Verificar integridad (SHA-256 del archivo cifrado)
+        run: |
+          ESPERADO=$(jq -r .sha256Cifrado "$NOMBRE.manifest.json")
+          echo "$ESPERADO  $NOMBRE.archive.gz.gpg" | sha256sum -c -
+
+      - name: 3. Descifrar (AES-256)
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          gpg --batch --quiet --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
+            --decrypt --output respaldo.archive.gz "$NOMBRE.archive.gz.gpg"
+          jq '.colecciones' "$NOMBRE.manifest.json" > esperado.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pymongo
+
+      - name: 4. Ensayo en un MongoDB desechable
+        run: |
+          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+            mongorestore --uri "$URI_PRUEBA" --gzip --archive=/w/respaldo.archive.gz --drop
+          python scripts/huella.py "$URI_PRUEBA" "$DB" > ensayo.json
+          python scripts/comparar.py esperado.json ensayo.json | tee ensayo.md
+
+      - name: 5. Restaurar en producción (Atlas)
+        if: inputs.destino == 'produccion'
+        run: |
+          curl -fsS "$APP_URL/api/estado" | jq -c '.colecciones[] | {coleccion, documentos}' || true
+          T=$(date +%s%3N)
+          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+            mongorestore --uri "$URI_APP" --gzip --archive=/w/respaldo.archive.gz --nsInclude "$DB.*" --drop
+          echo "MS_PROD=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
+          python scripts/huella.py "$URI_APP" "$DB" > produccion.json
+          python scripts/comparar.py esperado.json produccion.json | tee produccion.md
+
+      - name: 6. Registrar en la app
+        if: success()
+        continue-on-error: true
+        env:
+          GUARDIAN_TOKEN: ${{ secrets.GUARDIAN_TOKEN }}
+          DESTINO: ${{ inputs.destino }}
+        run: |
+          DOCS=$(jq '[.[].documentos] | add' esperado.json)
+          jq -n --arg tipo "restauración ($DESTINO) de $NOMBRE" --arg run "$GITHUB_RUN_NUMBER" \
+                --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --argjson docs "$DOCS" --argjson dur "$(( $(date +%s) - INICIO ))" \
+            '{tipo:$tipo, run:$run, url:$url, documentos:$docs, verificado:true, duracionSeg:$dur}' \
+          | curl -fsS -X POST "$APP_URL/api/respaldos" -H "Content-Type: application/json" -H "X-Guardian-Token: $GUARDIAN_TOKEN" -d @-
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Restauración de \`${NOMBRE:-?}\` (destino: ${{ inputs.destino }})"
+            echo
+            echo "1. SHA-256 del archivo cifrado comprobado contra el manifiesto"
+            echo "2. Descifrado con AES-256"
+            echo
+            echo "### Ensayo en MongoDB desechable"
+            [ -f ensayo.md ] && cat ensayo.md
+            if [ -f produccion.md ]; then
+              echo
+              echo "### Producción (MongoDB Atlas) — restaurada en ${MS_PROD} ms"
+              cat produccion.md
+            fi
+            echo
+            echo "**Tiempo total de recuperación (RTO medido): $(( $(date +%s) - INICIO )) s**"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,129 @@
+name: ci-cd
+
+# Cada push: pruebas contra MongoDB real -> imagen en ghcr.io -> despliegue en Render -> verificación
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  SERVICE_NAME: mongo-backup-guardian
+
+jobs:
+  test:
+    name: Pruebas con MongoDB 8.0
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:8.0
+        ports: [ "27017:27017" ]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Compilar
+        run: dotnet build MongoBackupGuardian.slnx -c Release
+      - name: Pruebas (respaldo, desastre y restauración contra MongoDB real)
+        env:
+          MONGODB_URI: mongodb://localhost:27017
+        run: dotnet test MongoBackupGuardian.slnx -c Release --no-build --logger "trx;LogFileName=resultados.trx" --logger "console;verbosity=normal"
+      - name: Resumen de pruebas
+        if: always()
+        run: |
+          F=$(find tests -name resultados.trx | head -1)
+          TOTAL=$(grep -o 'total="[0-9]*"' "$F" | head -1 | grep -o '[0-9]*')
+          PASS=$(grep -o 'passed="[0-9]*"' "$F" | head -1 | grep -o '[0-9]*')
+          echo "### Pruebas: $PASS de $TOTAL superadas contra MongoDB 8.0" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Imagen en GitHub Packages
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: vars
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "image=$IMAGE:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ steps.vars.outputs.image }}
+      - name: Resumen
+        run: echo "### Imagen publicada ${{ steps.vars.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Despliegue en Render
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      IMAGE: ${{ needs.build.outputs.image }}
+    steps:
+      - name: Buscar el servicio
+        run: |
+          ID=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services?name=$SERVICE_NAME&limit=1" | jq -r '.[0].service.id // empty')
+          if [ -z "$ID" ]; then
+            echo "El servicio todavía no existe: ejecuta infra.yml para crearlo." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "SERVICE_ID=$ID" >> "$GITHUB_ENV"
+      - name: Desplegar la imagen
+        if: env.SERVICE_ID != ''
+        run: |
+          DEPLOY=$(curl -fsS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+            -d "{\"imageUrl\": \"$IMAGE\"}" "https://api.render.com/v1/services/$SERVICE_ID/deploys" | jq -r '.id')
+          echo "Deploy $DEPLOY con $IMAGE"
+          for _ in $(seq 1 60); do
+            STATUS=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services/$SERVICE_ID/deploys/$DEPLOY" | jq -r '.status')
+            echo "Estado: $STATUS"
+            case "$STATUS" in live) break ;; *failed|canceled|deactivated) exit 1 ;; esac
+            sleep 10
+          done
+          test "$STATUS" = "live"
+      - name: Verificar la versión publicada
+        if: env.SERVICE_ID != ''
+        run: |
+          URL=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$SERVICE_ID" | jq -r '.serviceDetails.url')
+          for _ in $(seq 1 30); do
+            V=$(curl -fsS "$URL/api/info" | jq -r '.version' || true)
+            [ "$V" = "$GITHUB_SHA" ] && break
+            sleep 10
+          done
+          curl -fsS "$URL/api/info" | jq .
+          test "$V" = "$GITHUB_SHA"
+          {
+            echo "### Desplegado en Render"
+            echo "- URL: $URL"
+            echo "- Versión verificada: \`${GITHUB_SHA::7}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

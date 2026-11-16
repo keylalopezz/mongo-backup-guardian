@@ -1,0 +1,89 @@
+name: infra
+
+# Infraestructura como código: MongoDB Atlas (proyecto, clúster M0, usuarios, red) + Web Service en Render
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      MONGODB_ATLAS_PUBLIC_KEY: ${{ secrets.ATLAS_PUBLIC_KEY }}
+      MONGODB_ATLAS_PRIVATE_KEY: ${{ secrets.ATLAS_PRIVATE_KEY }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ secrets.RENDER_OWNER_ID }}
+      TF_VAR_atlas_org_id: ${{ secrets.ATLAS_ORG_ID }}
+      TF_VAR_app_password: ${{ secrets.MONGO_APP_PASSWORD }}
+      TF_VAR_backup_password: ${{ secrets.MONGO_BACKUP_PASSWORD }}
+      TF_VAR_guardian_token: ${{ secrets.GUARDIAN_TOKEN }}
+      TF_VAR_ghcr_username: ${{ github.actor }}
+      TF_VAR_ghcr_token: ${{ secrets.GHCR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Imagen de la app
+        run: echo "TF_VAR_image_url=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # El repositorio es público y sus artefactos se pueden descargar: el estado
+      # (que contiene secretos) se guarda cifrado con AES-256 y se descifra aquí.
+      - name: Recuperar el estado de Terraform (cifrado)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: |
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow infra.yml --status completed --limit 10 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n terraform-state -D . 2>/dev/null; then
+              gpg --batch --quiet --pinentry-mode loopback --passphrase "$TF_STATE_PASSPHRASE" \
+                --decrypt --output terraform.tfstate terraform.tfstate.gpg
+              echo "Estado recuperado de la ejecución $id"; break
+            fi
+          done
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - run: terraform init -input=false
+      - run: terraform validate
+      - run: terraform plan -input=false -out=tfplan
+      - run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Cifrar el estado con AES-256
+        if: always()
+        env:
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: |
+          if [ -f terraform.tfstate ]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$TF_STATE_PASSPHRASE" \
+              --symmetric --cipher-algo AES256 --output terraform.tfstate.gpg terraform.tfstate
+          fi
+
+      - name: Guardar el estado cifrado (artefacto, 90 días)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: infra/terraform.tfstate.gpg
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Resumen
+        run: |
+          {
+            echo "### Infraestructura"
+            echo "- App: $(terraform output -raw app_url)"
+            echo "- Atlas: proyecto \`$(terraform output -raw atlas_project_id)\`, clúster M0 con MongoDB $(terraform output -raw mongodb_version)"
+            echo "- Host SRV: \`$(terraform output -raw mongodb_srv_host)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
