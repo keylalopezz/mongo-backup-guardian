@@ -31,7 +31,7 @@ jobs:
       TF_VAR_ghcr_username: ${{ github.actor }}
       TF_VAR_ghcr_token: ${{ secrets.GHCR_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Imagen de la app
         run: echo "TF_VAR_image_url=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
@@ -51,7 +51,7 @@ jobs:
             fi
           done
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
 
@@ -72,7 +72,7 @@ jobs:
 
       - name: Guardar el estado cifrado (artefacto, 90 días)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: terraform-state
           path: infra/terraform.tfstate.gpg

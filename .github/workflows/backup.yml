@@ -34,7 +34,7 @@ jobs:
       URI_PROD: mongodb+srv://guardian-backup:${{ secrets.MONGO_BACKUP_PASSWORD }}@${{ secrets.MONGODB_HOST }}/?appName=guardian-backup
       URI_PRUEBA: mongodb://localhost:27018
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Preparar
         run: |
@@ -50,7 +50,7 @@ jobs:
         continue-on-error: true
         run: curl -fsS -X POST "$APP_URL/api/actividad?n=8"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install --quiet pymongo
@@ -108,7 +108,7 @@ jobs:
           echo "BYTES_CIFRADO=$BYTES" >> "$GITHUB_ENV"
 
       - name: 6a. Copia fuera de Atlas — artefacto de Actions (30 días)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NOMBRE }}
           path: salida/

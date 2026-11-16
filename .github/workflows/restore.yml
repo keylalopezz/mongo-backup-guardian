@@ -41,7 +41,7 @@ jobs:
       URI_PRUEBA: mongodb://localhost:27018
       URI_APP: mongodb+srv://guardian-app:${{ secrets.MONGO_APP_PASSWORD }}@${{ secrets.MONGODB_HOST }}/?appName=guardian-restore
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validar la petición
         env:
@@ -79,7 +79,7 @@ jobs:
             --decrypt --output respaldo.archive.gz "$NOMBRE.archive.gz.gpg"
           jq '.colecciones' "$NOMBRE.manifest.json" > esperado.json
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install --quiet pymongo
