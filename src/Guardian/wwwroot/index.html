@@ -130,8 +130,10 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const hora = f => new Date(f).toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-const fecha = f => new Date(f).toLocaleString('es-PE', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+// Las fechas llegan en Extended JSON relajado: { "$date": "2026-11-16T01:07:03Z" }
+const aFecha = f => new Date(f && f.$date !== undefined ? f.$date : f);
+const hora = f => aFecha(f).toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+const fecha = f => aFecha(f).toLocaleString('es-PE', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
 const kb = b => b >= 1048576 ? (b/1048576).toFixed(2)+' MB' : (b/1024).toFixed(1)+' KB';
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.json(); };
