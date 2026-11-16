@@ -30,7 +30,8 @@ msh()   { docker exec "$1" mongosh --quiet --eval "$2"; }
 tools() { docker run --rm --network "$NET" -v "$WORK_DOCKER:/w" "$IMG" "$@"; }
 huella(){ "$PY" "$DIR/huella.py" "$1" biblioteca prestamos | "$PY" -c 'import sys,json; d=json.load(sys.stdin)["prestamos"]; print(d["documentos"], d["sha256"])'; }
 ultimo_ts() { msh pitr-prod 'const e=db.getSiblingDB("local").oplog.rs.find().sort({$natural:-1}).limit(1).next(); print(e.ts.getHighBits()+" "+e.ts.getLowBits())'; }
-ahora_ms() { date +%s%3N; }
+# Reloj monotónico (no retrocede si el sistema ajusta la hora, como date +%s%3N)
+ahora_ms() { awk '{ printf "%d\n", $1 * 1000 }' /proc/uptime; }
 
 limpiar() { docker rm -f pitr-prod pitr-dr >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap limpiar EXIT

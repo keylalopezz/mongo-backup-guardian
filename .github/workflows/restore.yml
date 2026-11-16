@@ -95,10 +95,10 @@ jobs:
         if: inputs.destino == 'produccion'
         run: |
           curl -fsS "$APP_URL/api/estado" | jq -c '.colecciones[] | {coleccion, documentos}' || true
-          T=$(date +%s%3N)
+          T=$(awk '{printf "%d", $1*1000}' /proc/uptime)
           docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/w" mongo:8.0 \
             mongorestore --uri "$URI_APP" --gzip --archive=/w/respaldo.archive.gz --nsInclude "$DB.*" --drop
-          echo "MS_PROD=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
+          echo "MS_PROD=$(( $(awk '{printf "%d", $1*1000}' /proc/uptime) - T ))" >> "$GITHUB_ENV"
           python scripts/huella.py "$URI_APP" "$DB" > produccion.json
           python scripts/comparar.py esperado.json produccion.json | tee produccion.md
 
