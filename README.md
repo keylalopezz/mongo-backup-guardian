@@ -10,6 +10,10 @@ Una biblioteca universitaria (libros, socios y préstamos) sobre **MongoDB Atlas
 > Actividad grupal — Base de Datos II, Escuela Profesional de Ingeniería de Sistemas, Universidad Privada de Tacna.
 > Autores: **Keyla Noelia Lopez Ojeda** y **Adrian Fabricio Salas Acuña**.
 
+**App publicada:** https://mongo-backup-guardian.onrender.com
+
+![Laboratorio de desastre: restauración verificada](docs/img/app.png)
+
 ## Estrategia de respaldo
 
 | Capa | Técnica | Frecuencia | Dónde vive | Verificación |
@@ -81,3 +85,15 @@ bash scripts/pitr.sh                              # demostración de PITR (requi
 | `TF_STATE_PASSPHRASE` | Cifra el estado de Terraform (el repositorio es público) |
 | `GUARDIAN_TOKEN` | GitHub Actions registra sus respaldos en la app |
 | `RENDER_API_KEY`, `RENDER_OWNER_ID`, `GHCR_TOKEN` | Crear y desplegar el Web Service |
+
+## Evidencias
+
+| Respaldo diario verificado | Recuperación ante desastres en producción |
+|---|---|
+| ![backup.yml](docs/img/backup.png) | ![restore.yml](docs/img/restore.png) |
+| **Point-in-time recovery con oplog** | **Respaldos cifrados fuera de Atlas** |
+| ![pitr.yml](docs/img/pitr.png) | ![release respaldos](docs/img/release.png) |
+| **Corrupción silenciosa detectada por la huella** | **Línea de tiempo de la app** |
+| ![corrupción](docs/img/app-corrupcion.png) | ![eventos](docs/img/app-linea-tiempo.png) |
+| **MongoDB Atlas M0 (sin backups administrados)** | **Render** |
+| ![Atlas](docs/img/atlas.png) | ![Render](docs/img/render.png) |
