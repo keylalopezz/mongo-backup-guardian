@@ -63,7 +63,7 @@ jobs:
       - name: 2. mongodump (usuario de solo lectura)
         run: |
           T=$(date +%s%3N)
-          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+          docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/w" mongo:8.0 \
             mongodump --uri "$URI_PROD" --db "$DB" --gzip --archive=/w/respaldo.archive.gz
           echo "MS_DUMP=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
           ls -l respaldo.archive.gz
@@ -71,7 +71,7 @@ jobs:
       - name: 3. Restauración de prueba en un MongoDB desechable
         run: |
           T=$(date +%s%3N)
-          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+          docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/w" mongo:8.0 \
             mongorestore --uri "$URI_PRUEBA" --gzip --archive=/w/respaldo.archive.gz --drop
           echo "MS_RESTORE=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
 

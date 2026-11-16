@@ -86,7 +86,7 @@ jobs:
 
       - name: 4. Ensayo en un MongoDB desechable
         run: |
-          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+          docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/w" mongo:8.0 \
             mongorestore --uri "$URI_PRUEBA" --gzip --archive=/w/respaldo.archive.gz --drop
           python scripts/huella.py "$URI_PRUEBA" "$DB" > ensayo.json
           python scripts/comparar.py esperado.json ensayo.json | tee ensayo.md
@@ -96,7 +96,7 @@ jobs:
         run: |
           curl -fsS "$APP_URL/api/estado" | jq -c '.colecciones[] | {coleccion, documentos}' || true
           T=$(date +%s%3N)
-          docker run --rm --network host -v "$PWD:/w" mongo:8.0 \
+          docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/w" mongo:8.0 \
             mongorestore --uri "$URI_APP" --gzip --archive=/w/respaldo.archive.gz --nsInclude "$DB.*" --drop
           echo "MS_PROD=$(( $(date +%s%3N) - T ))" >> "$GITHUB_ENV"
           python scripts/huella.py "$URI_APP" "$DB" > produccion.json

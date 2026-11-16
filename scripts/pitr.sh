@@ -21,7 +21,7 @@ NET=pitr-net
 PY=${PY:-python3}
 DIR=$(cd "$(dirname "$0")" && (pwd -W 2>/dev/null || pwd))
 WORK=${WORK:-$PWD/pitr-trabajo}
-rm -rf "$WORK" && mkdir -p "$WORK"
+rm -rf "$WORK" && mkdir -p "$WORK" && chmod 777 "$WORK"   # los contenedores de herramientas escriben aquí
 WORK_DOCKER=$(cd "$WORK" && (pwd -W 2>/dev/null || pwd))
 PROD="mongodb://localhost:27101/?directConnection=true"
 DR="mongodb://localhost:27102/?directConnection=true"
